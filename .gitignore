@@ -12,3 +12,5 @@ runs
 *.onnx
 __version__*
 PKG-INFO
+venv
+.idea
