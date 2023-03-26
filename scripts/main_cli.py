@@ -40,3 +40,5 @@ def main():
         app.run(export_onnx.main)
     else:
         raise Exception(f'Command {command} not found')
+
+main()

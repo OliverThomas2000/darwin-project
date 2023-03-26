@@ -15,6 +15,7 @@ import torch.nn as nn
 import torchaudio
 from einops import rearrange
 from scipy.signal import lfilter
+from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC
 
 
 def mod_sigmoid(x):
@@ -492,3 +493,36 @@ class LoggerCallback(pl.Callback):
 
     def load_state_dict(self, state_dict):
         self.state.update(state_dict)
+
+
+class PhonemeDistance():
+
+    def __init__(self):
+        super(PhonemeDistance, self).__init__()
+        self.device = torch.device('cuda:0')
+        self.phoneme_processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-xlsr-53-espeak-cv-ft")
+        self.phoneme_model = Wav2Vec2ForCTC.from_pretrained("facebook/wav2vec2-xlsr-53-espeak-cv-ft")
+        self.phoneme_model.eval()
+
+    def forward(self, x, y):
+        """
+        @param x: input tensor with shape (batch_size, 1, m) where m is the number of samples after
+                  pqmf.inverse in rave's training step. This is dependent on the n_samples flag used
+                  to launch rave, which defaults to 131072 if nothing is provided.
+        @param y: tensor with the same shape as x representing the output of the model.
+        """
+        with torch.no_grad():
+            # Only performs phoneme extraction on one datum from the batch for now.
+            # This will have a size of (1, 544, 392). I think 392 is the number of classes
+            # in the phoneme model, which is why we argmax this dimension next.
+            x_out = self.phoneme_model(x[1].cpu()).logits
+            y_out = self.phoneme_model(y[1].cpu()).logits
+
+        # The problem is these are all zeros at the moment, and the transcript is empty.
+        x_pred_ids = torch.argmax(x_out, dim=-1)
+        y_pred_ids = torch.argmax(y_out, dim=-1)
+
+        transcription_x = self.phoneme_processor.batch_decode(x_pred_ids)
+        transcription_y = self.phoneme_processor.batch_decode(y_pred_ids)
+
+        return torch.tensor(0.0, requires_grad=True)

@@ -84,6 +84,7 @@ class RAVE(pl.LightningModule):
         audio_distance: Callable[[], nn.Module],
         multiband_audio_distance: Callable[[], nn.Module],
         balancer: Callable[[], Balancer],
+        phoneme_distance=None,
         warmup_quantize: Optional[int] = None,
         pqmf: Optional[Callable[[], nn.Module]] = None,
         update_discriminator_every: int = 2,
@@ -100,6 +101,8 @@ class RAVE(pl.LightningModule):
 
         self.audio_distance = audio_distance()
         self.multiband_audio_distance = multiband_audio_distance()
+        if phoneme_distance is not None:
+            self.phoneme_distance = phoneme_distance()
 
         self.gan_loss = gan_loss
 
@@ -211,6 +214,14 @@ class RAVE(pl.LightningModule):
             distances[f'fullband_{k}'] = v
 
         feature_matching_distance = 0.
+
+        if self.phoneme_distance is not None:
+            # For now, compute the phoneme distance in all stages of training.
+            # Later we can move it into the discrimination stage?
+
+            d = self.phoneme_distance.forward(x, y)
+            # TODO: uncomment this at some point. For now it breaks training
+            # distances['phonemes'] = d
 
         if self.warmed_up:  # DISCRIMINATION
             xy = torch.cat([x, y], 0)
