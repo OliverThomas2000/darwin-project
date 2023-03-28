@@ -9,6 +9,7 @@ import librosa as li
 import lmdb
 import numpy as np
 import pytorch_lightning as pl
+import scipy.signal
 import torch
 import torch.fft as fft
 import torch.nn as nn
@@ -497,6 +498,9 @@ class LoggerCallback(pl.Callback):
 
 class PhonemeDistance():
 
+    # Rave uses 48khz but the phoneme extractor requires 16khz
+    DOWNASMPLE_FACTOR = int(48000 / 16000)
+
     def __init__(self):
         super(PhonemeDistance, self).__init__()
         self.device = torch.device('cuda:0')
@@ -511,12 +515,22 @@ class PhonemeDistance():
                   to launch rave, which defaults to 131072 if nothing is provided.
         @param y: tensor with the same shape as x representing the output of the model.
         """
+
+        # We need to downsample the signal for the phoneme extractor, but this seems REALLY expensive
+        x0_downsampled = torch.tensor(np.copy(
+            scipy.signal.decimate(x[0].cpu().detach().numpy(), self.DOWNASMPLE_FACTOR/16000)
+        ))
+
+        y0_downsampled = torch.tensor(np.copy(
+            scipy.signal.decimate(y[0].cpu().detach().numpy(), self.DOWNASMPLE_FACTOR / 16000)
+        ))
+
         with torch.no_grad():
             # Only performs phoneme extraction on one datum from the batch for now.
             # This will have a size of (1, 544, 392). I think 392 is the number of classes
             # in the phoneme model, which is why we argmax this dimension next.
-            x_out = self.phoneme_model(x[1].cpu()).logits
-            y_out = self.phoneme_model(y[1].cpu()).logits
+            x_out = self.phoneme_model(x0_downsampled).logits
+            y_out = self.phoneme_model(y0_downsampled).logits
 
         # The problem is these are all zeros at the moment, and the transcript is empty.
         x_pred_ids = torch.argmax(x_out, dim=-1)
