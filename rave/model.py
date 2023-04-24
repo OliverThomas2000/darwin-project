@@ -214,14 +214,15 @@ class RAVE(pl.LightningModule):
             distances[f'fullband_{k}'] = v
 
         feature_matching_distance = 0.
+        phoneme_distance_value = 0.
 
         if self.phoneme_distance is not None:
             # For now, compute the phoneme distance in all stages of training.
             # Later we can move it into the discrimination stage?
 
-            d = self.phoneme_distance.forward(x, y)
+            phoneme_distance_value = self.phoneme_distance.forward(x, y)
             # TODO: uncomment this at some point. For now it breaks training
-            # distances['phonemes'] = d
+            distances['phonemes'] = phoneme_distance_value
 
         if self.warmed_up:  # DISCRIMINATION
             xy = torch.cat([x, y], 0)
@@ -274,6 +275,8 @@ class RAVE(pl.LightningModule):
         if self.warmed_up:
             loss_gen['feature_matching'] = feature_matching_distance
             loss_gen['adversarial'] = loss_adv
+
+        # loss_gen['regularization'] -= phoneme_distance_value
 
         # OPTIMIZATION
         if not (batch_idx %

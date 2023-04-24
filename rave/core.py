@@ -14,6 +14,7 @@ import torch
 import torch.fft as fft
 import torch.nn as nn
 import torchaudio
+import Levenshtein
 from einops import rearrange
 from scipy.signal import lfilter
 from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC
@@ -496,7 +497,7 @@ class LoggerCallback(pl.Callback):
         self.state.update(state_dict)
 
 
-class PhonemeDistance():
+class PhonemeDistance(nn.Module):
 
     # Rave uses 48khz but the phoneme extractor requires 16khz
     DOWNASMPLE_FACTOR = int(48000 / 16000)
@@ -517,20 +518,23 @@ class PhonemeDistance():
         """
 
         # We need to downsample the signal for the phoneme extractor, but this seems REALLY expensive
-        x0_downsampled = torch.tensor(np.copy(
-            scipy.signal.decimate(x[0].cpu().detach().numpy(), self.DOWNASMPLE_FACTOR/16000)
-        ))
+        # x0_downsampled = torch.tensor(np.copy(
+        #     scipy.signal.decimate(x[0].cpu().numpy(), self.DOWNASMPLE_FACTOR)
+        # ))
+        #
+        x0_downsampled = torchaudio.functional.resample(x[0], 48000, 16000).cpu()
+        y0_downsampled = torchaudio.functional.resample(y[0], 48000, 16000).cpu()
 
-        y0_downsampled = torch.tensor(np.copy(
-            scipy.signal.decimate(y[0].cpu().detach().numpy(), self.DOWNASMPLE_FACTOR / 16000)
-        ))
+        x0_downsampled = torch.tensor(x0_downsampled, requires_grad=False)
+        y0_downsampled = torch.tensor(y0_downsampled, requires_grad=False)
 
-        with torch.no_grad():
-            # Only performs phoneme extraction on one datum from the batch for now.
-            # This will have a size of (1, 544, 392). I think 392 is the number of classes
-            # in the phoneme model, which is why we argmax this dimension next.
-            x_out = self.phoneme_model(x0_downsampled).logits
-            y_out = self.phoneme_model(y0_downsampled).logits
+        # Only performs phoneme extraction on one datum from the batch for now.
+        # This will have a size of (1, 544, 392). I think 392 is the number of classes
+        # in the phoneme model, which is why we argmax this dimension next.
+        x_out = self.phoneme_model(x0_downsampled).logits
+        y_out = self.phoneme_model(y0_downsampled).logits
+
+        out = torch.tensor(0., requires_grad=True)
 
         # The problem is these are all zeros at the moment, and the transcript is empty.
         x_pred_ids = torch.argmax(x_out, dim=-1)
@@ -539,4 +543,7 @@ class PhonemeDistance():
         transcription_x = self.phoneme_processor.batch_decode(x_pred_ids)
         transcription_y = self.phoneme_processor.batch_decode(y_pred_ids)
 
-        return torch.tensor(0.0, requires_grad=True)
+        dist = Levenshtein.distance(transcription_y, transcription_x)
+        out = out + dist
+        # return torch.cdist(y_pred_ids.type(torch.FloatTensor), x_pred_ids.type(torch.FloatTensor))[0]
+        return out.to(self.device)
