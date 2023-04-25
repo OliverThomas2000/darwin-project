@@ -9,12 +9,11 @@ import librosa as li
 import lmdb
 import numpy as np
 import pytorch_lightning as pl
-import scipy.signal
+import math
 import torch
 import torch.fft as fft
 import torch.nn as nn
 import torchaudio
-import Levenshtein
 from einops import rearrange
 from scipy.signal import lfilter
 from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC
@@ -497,44 +496,63 @@ class LoggerCallback(pl.Callback):
         self.state.update(state_dict)
 
 
-class PhonemeDistance(nn.Module):
+class PhonemeDistance():
 
-    # Rave uses 48khz but the phoneme extractor requires 16khz
-    DOWNASMPLE_FACTOR = int(48000 / 16000)
+    RAVE_SAMPLE_RATE = 48000
+    PHONEME_SAMPLE_RATE = 16000
 
     def __init__(self):
         super(PhonemeDistance, self).__init__()
         self.device = torch.device('cuda:0')
         self.phoneme_processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-xlsr-53-espeak-cv-ft")
         self.phoneme_model = Wav2Vec2ForCTC.from_pretrained("facebook/wav2vec2-xlsr-53-espeak-cv-ft")
+
+        # Freeze parameters. They shouldn't be trainable.
         self.phoneme_model.eval()
+        for p in self.phoneme_model.parameters():
+            p.requires_grad = False
+
+        # Loss function to compare phonemes of rave's output and input.
         self.loss_fn = torch.nn.CrossEntropyLoss()
 
-    def forward(self, x, y):
+    def forward(self, x_batch, y_batch):
         """
-        @param x: input tensor with shape (batch_size, 1, m) where m is the number of samples after
+        @param x_batch: input tensor with shape (batch_size, 1, m) where m is the number of samples after
                   pqmf.inverse in rave's training step. This is dependent on the n_samples flag used
                   to launch rave, which defaults to 131072 if nothing is provided.
-        @param y: tensor with the same shape as x representing the output of the model.
+        @param y_batch: tensor with the same shape as x representing the output of the model.
         """
 
-        # We need to downsample the signal for the phoneme extractor, but this seems REALLY expensive
-        x0_downsampled = torchaudio.functional.resample(x[0], 48000, 16000)
-        y0_downsampled = torchaudio.functional.resample(y[0], 48000, 16000)
+        batches = x_batch.size()[0]
 
-        # Get the phoneme id's of the input to RAVE and the phoneme logits for the output of RAVE.
-        # Argmax is not differentiable so we can't just compare the x and y id's.
-        # Output of the phoneme model is of dimensions (1, minibatch size, number of classes)
-        x_pred_ids = torch.argmax(self.phoneme_model(x0_downsampled).logits, dim=-1)[0]
-        y_out = self.phoneme_model(y0_downsampled).logits[0]
+        x_flat = torch.flatten(x_batch)
+        y_flat = torch.flatten(y_batch)
 
-        # y_out size (minibatch, classes), x_pred_ids size (minibatch)
-        # loss should be differentiable :)
+        # We need to downsample the signal for the phoneme extractor
+        x_flat_downsampled = torchaudio.functional.resample(x_flat, self.RAVE_SAMPLE_RATE, self.PHONEME_SAMPLE_RATE)
+        y_flat_downsampled = torchaudio.functional.resample(y_flat, self.RAVE_SAMPLE_RATE, self.PHONEME_SAMPLE_RATE)
+
+        resampled_batch_size = math.floor(x_flat_downsampled.size()[0] / batches)
+
+        # Pick fewer samples so we can resize into the original number of batches.
+        x_flat_downsampled = x_flat_downsampled[0:(resampled_batch_size * batches)]
+        y_flat_downsampled = y_flat_downsampled[0:(resampled_batch_size * batches)]
+
+        x_batch_downsampled = torch.reshape(x_flat_downsampled, (batches, resampled_batch_size))
+        y_batch_downsampled = torch.reshape(y_flat_downsampled, (batches, resampled_batch_size))
+
+        # Get the logits from the phoneme model, and flatten the batches of minibatches for loss calculation
+        # i.e. go from dims (batches, minibatches, classes) to (batches * minibatches, classes)
+        x_out = self.phoneme_model(x_batch_downsampled).logits
+        x_out = x_out.view(x_out.size()[0] * x_out.size()[1], x_out.size()[2])
+
+        y_out = self.phoneme_model(y_batch_downsampled).logits
+        y_out = y_out.view(y_out.size()[0] * y_out.size()[1], y_out.size()[2])
+
+        # Get the indices of predicted phoneme classes for loss calculation
+        x_pred_ids = torch.argmax(x_out, dim=-1)
+
+        # Loss should be differentiable :)
         loss = self.loss_fn(y_out, x_pred_ids)
 
         return loss
-
-    @staticmethod
-    def soft_cross_entropy(logits, labels):
-        logprobs = torch.nn.functional.log_softmax(logits, dim=-1)
-        return -(labels * logprobs).sum() / logits.shape[0]
