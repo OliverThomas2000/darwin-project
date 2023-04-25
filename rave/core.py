@@ -508,6 +508,7 @@ class PhonemeDistance(nn.Module):
         self.phoneme_processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-xlsr-53-espeak-cv-ft")
         self.phoneme_model = Wav2Vec2ForCTC.from_pretrained("facebook/wav2vec2-xlsr-53-espeak-cv-ft")
         self.phoneme_model.eval()
+        self.loss_fn = torch.nn.CrossEntropyLoss()
 
     def forward(self, x, y):
         """
@@ -518,32 +519,22 @@ class PhonemeDistance(nn.Module):
         """
 
         # We need to downsample the signal for the phoneme extractor, but this seems REALLY expensive
-        # x0_downsampled = torch.tensor(np.copy(
-        #     scipy.signal.decimate(x[0].cpu().numpy(), self.DOWNASMPLE_FACTOR)
-        # ))
-        #
-        x0_downsampled = torchaudio.functional.resample(x[0], 48000, 16000).cpu()
-        y0_downsampled = torchaudio.functional.resample(y[0], 48000, 16000).cpu()
+        x0_downsampled = torchaudio.functional.resample(x[0], 48000, 16000)
+        y0_downsampled = torchaudio.functional.resample(y[0], 48000, 16000)
 
-        x0_downsampled = torch.tensor(x0_downsampled, requires_grad=False)
-        y0_downsampled = torch.tensor(y0_downsampled, requires_grad=False)
+        # Get the phoneme id's of the input to RAVE and the phoneme logits for the output of RAVE.
+        # Argmax is not differentiable so we can't just compare the x and y id's.
+        # Output of the phoneme model is of dimensions (1, minibatch size, number of classes)
+        x_pred_ids = torch.argmax(self.phoneme_model(x0_downsampled).logits, dim=-1)[0]
+        y_out = self.phoneme_model(y0_downsampled).logits[0]
 
-        # Only performs phoneme extraction on one datum from the batch for now.
-        # This will have a size of (1, 544, 392). I think 392 is the number of classes
-        # in the phoneme model, which is why we argmax this dimension next.
-        x_out = self.phoneme_model(x0_downsampled).logits
-        y_out = self.phoneme_model(y0_downsampled).logits
+        # y_out size (minibatch, classes), x_pred_ids size (minibatch)
+        # loss should be differentiable :)
+        loss = self.loss_fn(y_out, x_pred_ids)
 
-        out = torch.tensor(0., requires_grad=True)
+        return loss
 
-        # The problem is these are all zeros at the moment, and the transcript is empty.
-        x_pred_ids = torch.argmax(x_out, dim=-1)
-        y_pred_ids = torch.argmax(y_out, dim=-1)
-
-        transcription_x = self.phoneme_processor.batch_decode(x_pred_ids)
-        transcription_y = self.phoneme_processor.batch_decode(y_pred_ids)
-
-        dist = Levenshtein.distance(transcription_y, transcription_x)
-        out = out + dist
-        # return torch.cdist(y_pred_ids.type(torch.FloatTensor), x_pred_ids.type(torch.FloatTensor))[0]
-        return out.to(self.device)
+    @staticmethod
+    def soft_cross_entropy(logits, labels):
+        logprobs = torch.nn.functional.log_softmax(logits, dim=-1)
+        return -(labels * logprobs).sum() / logits.shape[0]
