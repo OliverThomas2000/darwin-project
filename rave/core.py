@@ -503,9 +503,9 @@ class PhonemeDistance():
 
     def __init__(self):
         super(PhonemeDistance, self).__init__()
-        self.device = torch.device('cuda:0')
-        self.phoneme_processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-xlsr-53-espeak-cv-ft")
+        self.device = torch.device('cuda:0')  # massive bodge hardcoding this but whatever
         self.phoneme_model = Wav2Vec2ForCTC.from_pretrained("facebook/wav2vec2-xlsr-53-espeak-cv-ft")
+        self.phoneme_model.to(self.device)
 
         # Freeze parameters. They shouldn't be trainable.
         self.phoneme_model.eval()
