@@ -102,7 +102,7 @@ class RAVE(pl.LightningModule):
         self.audio_distance = audio_distance()
         self.multiband_audio_distance = multiband_audio_distance()
         if phoneme_distance is not None:
-            self.phoneme_distance = phoneme_distance()
+            self.phoneme_distance = phoneme_distance(self.device)
 
         self.gan_loss = gan_loss
 

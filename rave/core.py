@@ -501,9 +501,9 @@ class PhonemeDistance():
     RAVE_SAMPLE_RATE = 48000
     PHONEME_SAMPLE_RATE = 16000
 
-    def __init__(self):
+    def __init__(self, device):
         super(PhonemeDistance, self).__init__()
-        self.device = torch.device('cuda:1')  # massive bodge hardcoding this but whatever
+        self.device = device
         self.phoneme_model = Wav2Vec2ForCTC.from_pretrained("facebook/wav2vec2-xlsr-53-espeak-cv-ft")
         self.phoneme_model.to(self.device)
 
