@@ -17,6 +17,7 @@ import torchaudio
 from einops import rearrange
 from scipy.signal import lfilter
 from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC
+from torchaudio import transforms
 
 
 def mod_sigmoid(x):
@@ -503,7 +504,7 @@ class PhonemeDistance():
 
     def __init__(self, device):
         super(PhonemeDistance, self).__init__()
-        self.device = device
+        self.device = "cuda:0"
         self.phoneme_model = Wav2Vec2ForCTC.from_pretrained("facebook/wav2vec2-xlsr-53-espeak-cv-ft")
         self.phoneme_model.to(self.device)
 
@@ -511,6 +512,8 @@ class PhonemeDistance():
         self.phoneme_model.eval()
         for p in self.phoneme_model.parameters():
             p.requires_grad = False
+
+        self.resample_transform = transforms.Resample(self.RAVE_SAMPLE_RATE, self.PHONEME_SAMPLE_RATE)
 
         # Loss function to compare phonemes of rave's output and input.
         self.loss_fn = torch.nn.CrossEntropyLoss()
@@ -529,8 +532,8 @@ class PhonemeDistance():
         y_flat = torch.flatten(y_batch)
 
         # We need to downsample the signal for the phoneme extractor
-        x_flat_downsampled = torchaudio.functional.resample(x_flat, self.RAVE_SAMPLE_RATE, self.PHONEME_SAMPLE_RATE)
-        y_flat_downsampled = torchaudio.functional.resample(y_flat, self.RAVE_SAMPLE_RATE, self.PHONEME_SAMPLE_RATE)
+        x_flat_downsampled = self.resample_transform(x_flat, self.RAVE_SAMPLE_RATE, self.PHONEME_SAMPLE_RATE)
+        y_flat_downsampled = self.resample_transform(y_flat, self.RAVE_SAMPLE_RATE, self.PHONEME_SAMPLE_RATE)
 
         resampled_batch_size = math.floor(x_flat_downsampled.size()[0] / batches)
 
